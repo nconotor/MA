@@ -79,3 +79,15 @@ fi
 if [ "$RUN_CYCLICTEST" -eq 1 ]; then
     { time cyclictest -l$LOOP_COUNT --mlockall --smp --priority=80 --interval=200 --distance=0 -h400 -q; } 2> "$TIME_LOG_FILE" > "$CYCLICTEST_OUTPUT_FILE"
 fi
+
+# Wait 60 minutes to ensure no thermal limits get triggert
+sleep 60
+
+# Change directory to the output directory
+cd "$OUTPUT_DIR"
+
+# Ensure plot.sh is executable
+chmod +x ../plot.sh
+
+# Run plot.sh inside the output directory
+../plot.sh
