@@ -14,7 +14,7 @@ RUN_LTP_RT=0
 DURATION=${1:-5m}
 
 # Set the loop count for cyclictest, defaulting to 10000000 if not provided
-LOOP_COUNT=${2:-10000000}
+LOOP_COUNT=${2:-1000000}
 
 # Parse additional command-line arguments
 shift 2
@@ -68,8 +68,7 @@ mkdir -p "$OUTPUT_DIR"
 
 # Define file names for output and log
 CYCLICTEST_OUTPUT_FILE="$OUTPUT_DIR/output"
-TIME_LOG_FILE="$OUTPUT_DIR/time_log"
-VAR_LOG_FILE="$OUTPUT_DIR/var_log"
+LOG_FILE="$OUTPUT_DIR/log"
 
 # Log the variables
 echo "Duration: $DURATION" > "$VAR_LOG_FILE"
@@ -81,6 +80,10 @@ echo "Run Stress: $RUN_STRESS" >> "$VAR_LOG_FILE"
 echo "Run Cyclictest: $RUN_CYCLICTEST" >> "$VAR_LOG_FILE"
 echo "Run LTP: $RUN_LTP" >> "$VAR_LOG_FILE" 
 echo "Run LTP_RT: $RUN_LTP_RT" >> "$VAR_LOG_FILE" 
+
+# Run and log hwlatdetect results
+echo "Running hwlatdetect for 60 seconds..." >> "$LOG_FILE"
+hwlatdetect --duration=60s >> "$LOG_FILE" 2>&1
 
 # Run tests based on the flags set
 if [ "$RUN_HACKBENCH" -eq 1 ]; then
@@ -127,7 +130,7 @@ if [ "$RUN_LTP_RT" -eq 1 ]; then
 fi
 
 if [ "$RUN_CYCLICTEST" -eq 1 ]; then
-    { time cyclictest -l$LOOP_COUNT --mlockall --smp --priority=80 --interval=200 --distance=0 -h400 -q; } 2> "$TIME_LOG_FILE" > "$CYCLICTEST_OUTPUT_FILE"
+    { time cyclictest -l$LOOP_COUNT --mlockall --smp --priority=80 --interval=200 --distance=0 -h400 -q; } 2> "$LOG_FILE" > "$CYCLICTEST_OUTPUT_FILE"
 fi
 
 # Change directory to the output directory
@@ -135,3 +138,7 @@ cd "$OUTPUT_DIR"
 
 # Run plot.sh inside the output directory
 ../plot.sh
+
+# Log the cpu state
+echo "Online CPUs: $(cat /sys/devices/system/cpu/online)" >> "$LOG_FILE"
+echo "Offline CPUs: $(cat /sys/devices/system/cpu/offline)" >> "$LOG_FILE"
