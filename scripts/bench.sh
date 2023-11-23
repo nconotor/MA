@@ -130,8 +130,12 @@ if [ "$RUN_LTP_RT" -eq 1 ]; then
 fi
 
 if [ "$RUN_CYCLICTEST" -eq 1 ]; then
-    { time cyclictest -l$LOOP_COUNT --mlockall --smp --priority=80 --interval=200 --distance=0 -h400 -q; } 2> "$LOG_FILE" > "$CYCLICTEST_OUTPUT_FILE"
+    { time cyclictest -l$LOOP_COUNT --mlockall --smp --priority=98 --interval=200 --distance=0 -h400 -q; } 2>> "$LOG_FILE" > "$CYCLICTEST_OUTPUT_FILE"
 fi
+
+# Log the cpu state
+echo "Online CPUs: $(cat /sys/devices/system/cpu/online)" >> "$LOG_FILE"
+echo "Offline CPUs: $(cat /sys/devices/system/cpu/offline)" >> "$LOG_FILE"
 
 # Change directory to the output directory
 cd "$OUTPUT_DIR"
@@ -139,6 +143,3 @@ cd "$OUTPUT_DIR"
 # Run plot.sh inside the output directory
 ../plot.sh
 
-# Log the cpu state
-echo "Online CPUs: $(cat /sys/devices/system/cpu/online)" >> "$LOG_FILE"
-echo "Offline CPUs: $(cat /sys/devices/system/cpu/offline)" >> "$LOG_FILE"
