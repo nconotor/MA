@@ -4,7 +4,11 @@
 RUN_HACKBENCH=0
 RUN_DD=0
 RUN_STRESS_NG=0
+RUN_STRESS=0
 RUN_CYCLICTEST=0
+RUN_LTP=0 
+RUN_LTP_RT=0 
+
 
 # Set the duration for the stress tests
 DURATION=${1:-5m}
@@ -30,6 +34,18 @@ while (( "$#" )); do
       ;;
     --cyclictest)
       RUN_CYCLICTEST=1
+      shift
+      ;;
+    --ltp)  
+      RUN_LTP=1
+      shift
+      ;;
+    --ltp_rt)  
+      RUN_LTP_RT=1
+      shift
+      ;;
+    --stress)  
+      RUN_STRESS=1
       shift
       ;;
     *)
@@ -61,33 +77,61 @@ echo "Loop Count: $LOOP_COUNT" >> "$VAR_LOG_FILE"
 echo "Run Hackbench: $RUN_HACKBENCH" >> "$VAR_LOG_FILE"
 echo "Run DD: $RUN_DD" >> "$VAR_LOG_FILE"
 echo "Run Stress-ng: $RUN_STRESS_NG" >> "$VAR_LOG_FILE"
+echo "Run Stress: $RUN_STRESS" >> "$VAR_LOG_FILE"
 echo "Run Cyclictest: $RUN_CYCLICTEST" >> "$VAR_LOG_FILE"
+echo "Run LTP: $RUN_LTP" >> "$VAR_LOG_FILE" 
+echo "Run LTP_RT: $RUN_LTP_RT" >> "$VAR_LOG_FILE" 
 
 # Run tests based on the flags set
 if [ "$RUN_HACKBENCH" -eq 1 ]; then
-    timeout $DURATION bash -c 'while :; do hackbench; done' > /dev/null 2>&1 &
+    timeout $DURATION bash -c 'while :; do hackbench 20; done' > /dev/null 2>&1 &
+    timeout $DURATION bash -c 'while :; do killall hackbench; sleep 5; done' > /dev/null 2>&1 &
 fi
 
 if [ "$RUN_DD" -eq 1 ]; then
-    timeout $DURATION bash -c 'while :; do dd if=/dev/zero of=/dev/null bs=128M; done' > /dev/null 2>&1 &
+    timeout $DURATION bash -c 'while :; do dd if=/dev/zero of=bigfile bs=1024000 count=1024; done' > /dev/null 2>&1 &
 fi
 
 if [ "$RUN_STRESS_NG" -eq 1 ]; then
     timeout $DURATION bash -c 'while :; do stress-ng --all 2; done' > /dev/null 2>&1 &
 fi
 
+if [ "$RUN_STRESS" -eq 1 ]; then
+    timeout $DURATION bash -c 'while :; do stress --cpu 4 --vm 16 --vm-bytes 1G -t 1m; done' > /dev/null 2>&1 &
+fi
+
+if [ "$RUN_LTP" -eq 1 ]; then
+    timeout $DURATION bash -c 'while :; do /opt/ltp/runltp -x 80 -R -q; done' > /dev/null 2>&1 &
+fi
+
+if [ "$RUN_LTP_RT" -eq 1 ]; then
+    # Save the current directory
+    CURRENT_DIR=$(pwd)
+
+    # Define the LTP script path relative to the current directory
+    LTP_SCRIPT_PATH="./ltp/testcases/realtime/run.sh"
+
+    # Check if the LTP script exists
+    if [ -f "$LTP_SCRIPT_PATH" ]; then
+        # Change to the LTP directory
+        cd $(dirname "$LTP_SCRIPT_PATH")
+
+        # Execute the LTP script in a loop until the timeout
+        timeout $DURATION bash -c 'while :; do ./run.sh -t all -l 1 > /dev/null 2>&1; done' &
+
+        # Change back to the original directory
+        cd "$CURRENT_DIR"
+    else
+        echo "LTP script not found at $LTP_SCRIPT_PATH"
+    fi
+fi
+
 if [ "$RUN_CYCLICTEST" -eq 1 ]; then
     { time cyclictest -l$LOOP_COUNT --mlockall --smp --priority=80 --interval=200 --distance=0 -h400 -q; } 2> "$TIME_LOG_FILE" > "$CYCLICTEST_OUTPUT_FILE"
 fi
 
-# Wait 60 minutes to ensure no thermal limits get triggert
-sleep 60
-
 # Change directory to the output directory
 cd "$OUTPUT_DIR"
-
-# Ensure plot.sh is executable
-chmod +x ../plot.sh
 
 # Run plot.sh inside the output directory
 ../plot.sh
