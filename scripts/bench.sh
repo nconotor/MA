@@ -1,145 +1,107 @@
 #!/bin/bash
+# Assure all features are activated
+modprobe msr
 
-# Default settings: all tests are off
-RUN_HACKBENCH=0
-RUN_DD=0
-RUN_STRESS_NG=0
-RUN_STRESS=0
-RUN_CYCLICTEST=0
-RUN_LTP=0 
-RUN_LTP_RT=0 
+# Default settings: all tests are off except for cyclictest
+declare -A RUN_TESTS=(
+    [HACKBENCH]=0
+    [DD]=0
+    [STRESS_NG]=0
+    [STRESS]=0
+    [LTP]=0
+    [LTP_RT]=0
+    [CYCLICTEST]=1  # Cyclictest always runs
+)
 
+# Cyclictest mode: 'baremetal' or 'docker'
+CYCLICTEST_MODE="baremetal"
 
-# Set the duration for the stress tests
-DURATION=${1:-5m}
+# Default values
+DURATION="210s"
+LOOP_COUNT="1000000"
 
-# Set the loop count for cyclictest, defaulting to 10000000 if not provided
-LOOP_COUNT=${2:-1000000}
-
-# Parse additional command-line arguments
-shift 2
+# Parse command-line arguments
 while (( "$#" )); do
-  case "$1" in
-    --hackbench)
-      RUN_HACKBENCH=1
-      shift
-      ;;
-    --dd)
-      RUN_DD=1
-      shift
-      ;;
-    --stress-ng)
-      RUN_STRESS_NG=1
-      shift
-      ;;
-    --cyclictest)
-      RUN_CYCLICTEST=1
-      shift
-      ;;
-    --ltp)  
-      RUN_LTP=1
-      shift
-      ;;
-    --ltp_rt)  
-      RUN_LTP_RT=1
-      shift
-      ;;
-    --stress)  
-      RUN_STRESS=1
-      shift
-      ;;
-    *)
-      echo "Error: Invalid option $1"
-      exit 1
-      ;;
-  esac
+    case "$1" in
+        --hackbench) RUN_TESTS[HACKBENCH]=1 ;;
+        --dd) RUN_TESTS[DD]=1 ;;
+        --stress-ng) RUN_TESTS[STRESS_NG]=1 ;;
+        --ltp) RUN_TESTS[LTP]=1 ;;
+        --ltp_rt) RUN_TESTS[LTP_RT]=1 ;;
+        --stress) RUN_TESTS[STRESS]=1 ;;
+        --docker) CYCLICTEST_MODE="docker" ;;
+        --duration) DURATION="$2"; shift ;;
+        --loopcount) LOOP_COUNT="$2"; shift ;;
+        *) echo "Error: Invalid option $1"; exit 1 ;;
+    esac
+    shift
 done
+
+# Function to run a command in the background with timeout
+run_command() {
+    local cmd=$1
+    timeout -k "$DURATION" "$DURATION" bash -c "while :; do $cmd > /dev/null 2>&1; done" &
+}
 
 # Create a timestamp
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 # Format the duration and loop count for folder naming
-FORMATTED_DURATION=$(echo $DURATION | sed 's/[^0-9]*//g')
-FORMATTED_LOOP_COUNT=$(echo $LOOP_COUNT | sed 's/[^0-9]*//g')
+FORMATTED_DURATION=${DURATION//[^0-9]/}
+FORMATTED_LOOP_COUNT=${LOOP_COUNT//[^0-9]/}
 
 # Create a folder name with loop count, runtime, and timestamp
 OUTPUT_DIR="Output_loop${FORMATTED_LOOP_COUNT}_run${FORMATTED_DURATION}_$TIMESTAMP"
 mkdir -p "$OUTPUT_DIR"
 
-# Define file names for output and log
-CYCLICTEST_OUTPUT_FILE="$OUTPUT_DIR/output"
+# Log file setup
 LOG_FILE="$OUTPUT_DIR/log"
+{
+    echo "Duration: $DURATION"
+    echo "Loop Count: $LOOP_COUNT"
+    for test in "${!RUN_TESTS[@]}"; do
+        echo "Run $test: ${RUN_TESTS[$test]}"
+    done
+} > "$LOG_FILE"
 
-# Log the variables
-echo "Duration: $DURATION" > "$LOG_FILE"
-echo "Loop Count: $LOOP_COUNT" >> "$LOG_FILE"
-echo "Run Hackbench: $RUN_HACKBENCH" >> "$LOG_FILE"
-echo "Run DD: $RUN_DD" >> "$LOG_FILE"
-echo "Run Stress-ng: $RUN_STRESS_NG" >> "$LOG_FILE"
-echo "Run Stress: $RUN_STRESS" >> "$LOG_FILE"
-echo "Run Cyclictest: $RUN_CYCLICTEST" >> "$LOG_FILE"
-echo "Run LTP: $RUN_LTP" >> "$LOG_FILE" 
-echo "Run LTP_RT: $RUN_LTP_RT" >> "$LOG_FILE" 
-
-# Run and log hwlatdetect results
+# Run hwlatdetect
 echo "Running hwlatdetect for 60 seconds..." >> "$LOG_FILE"
 hwlatdetect --duration=60s >> "$LOG_FILE" 2>&1
 
-# Run tests based on the flags set
-if [ "$RUN_HACKBENCH" -eq 1 ]; then
-    timeout $DURATION bash -c 'while :; do hackbench 20; done' > /dev/null 2>&1 &
-    timeout $DURATION bash -c 'while :; do killall hackbench; sleep 5; done' > /dev/null 2>&1 &
-fi
+# Run selected tests
+[[ ${RUN_TESTS[HACKBENCH]} -eq 1 ]] && run_command 'hackbench 20'
+[[ ${RUN_TESTS[DD]} -eq 1 ]] && run_command 'dd if=/dev/zero of=/dev/null bs=128M'
+[[ ${RUN_TESTS[STRESS_NG]} -eq 1 ]] && run_command 'stress-ng --all 1'
+[[ ${RUN_TESTS[STRESS]} -eq 1 ]] && run_command 'stress --cpu 4 --vm 16 --vm-bytes 1G -t 1m'
+[[ ${RUN_TESTS[LTP]} -eq 1 ]] && run_command '/opt/ltp/runltp -x 80 -R -q'
 
-if [ "$RUN_DD" -eq 1 ]; then
-    timeout $DURATION bash -c 'while :; do dd if=/dev/zero of=bigfile bs=1024000 count=1024; done' > /dev/null 2>&1 &
-fi
-
-if [ "$RUN_STRESS_NG" -eq 1 ]; then
-    timeout $DURATION bash -c 'while :; do stress-ng --all 2; done' > /dev/null 2>&1 &
-fi
-
-if [ "$RUN_STRESS" -eq 1 ]; then
-    timeout $DURATION bash -c 'while :; do stress --cpu 4 --vm 16 --vm-bytes 1G -t 1m; done' > /dev/null 2>&1 &
-fi
-
-if [ "$RUN_LTP" -eq 1 ]; then
-    timeout $DURATION bash -c 'while :; do /opt/ltp/runltp -x 80 -R -q; done' > /dev/null 2>&1 &
-fi
-
-if [ "$RUN_LTP_RT" -eq 1 ]; then
-    # Save the current directory
+# Run LTP real-time test
+if [[ ${RUN_TESTS[LTP_RT]} -eq 1 ]]; then
     CURRENT_DIR=$(pwd)
-
-    # Define the LTP script path relative to the current directory
     LTP_SCRIPT_PATH="./ltp/testcases/realtime/run.sh"
-
-    # Check if the LTP script exists
-    if [ -f "$LTP_SCRIPT_PATH" ]; then
-        # Change to the LTP directory
-        cd $(dirname "$LTP_SCRIPT_PATH")
-
-        # Execute the LTP script in a loop until the timeout
-        timeout $DURATION bash -c 'while :; do ./run.sh -t all -l 1 > /dev/null 2>&1; done' &
-
-        # Change back to the original directory
+    if [[ -f "$LTP_SCRIPT_PATH" ]]; then
+        cd "$(dirname "$LTP_SCRIPT_PATH")"
+        timeout -k "$DURATION" "$DURATION" bash -c 'while :; do ./run.sh -t all -l 1 > /dev/null 2>&1; done' &
         cd "$CURRENT_DIR"
     else
-        echo "LTP script not found at $LTP_SCRIPT_PATH"
+        echo "LTP script not found at $LTP_SCRIPT_PATH" >> "$LOG_FILE"
     fi
 fi
 
-if [ "$RUN_CYCLICTEST" -eq 1 ]; then
-    { time cyclictest -l$LOOP_COUNT --mlockall --smp --priority=98 --interval=200 --distance=0 -h400 -q; } 2>> "$LOG_FILE" > "$CYCLICTEST_OUTPUT_FILE"
+# Run cyclictest based on mode
+if [[ $CYCLICTEST_MODE == "docker" ]]; then
+    docker run --cap-add=sys_nice --cap-add=ipc_lock --ulimit rtprio=99 --device-cgroup-rule='c 10:* rmw' -v /dev:/dev -v "$(pwd)/output:/output" --rm nconotor/rt-tests:r2 /bin/bash -c "cyclictest -l$LOOP_COUNT --mlockall --smi --smp --priority=98 --interval=200 --distance=0 -h400 -v" 2>> "$LOG_FILE" > "$OUTPUT_DIR/output"
+else
+    { time cyclictest -l$LOOP_COUNT --mlockall --smi --smp --priority=98 --interval=200 --distance=0 -h400 -v; } 2>> "$LOG_FILE" > "$OUTPUT_DIR/output"
 fi
 
-# Log the cpu state
-echo "Online CPUs: $(cat /sys/devices/system/cpu/online)" >> "$LOG_FILE"
-echo "Offline CPUs: $(cat /sys/devices/system/cpu/offline)" >> "$LOG_FILE"
+# Log CPU states
+{
+    echo "Online CPUs: $(cat /sys/devices/system/cpu/online)"
+    echo "Offline CPUs: $(cat /sys/devices/system/cpu/offline)"
+} >> "$LOG_FILE"
 
-# Change directory to the output directory
+# Run plot.sh
 cd "$OUTPUT_DIR"
-
-# Run plot.sh inside the output directory
 ../plot.sh
-
+python3 ../info.py output
