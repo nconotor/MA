@@ -24,7 +24,6 @@ declare -A RUN_TESTS=(
     [STRESS_NG]=0
     [STRESS]=0
     [LTP]=0
-    [LTP_RT]=0
     [CYCLICTEST]=1  # Cyclictest always runs
 )
 
@@ -41,7 +40,6 @@ while (( "$#" )); do
         --dd) RUN_TESTS[DD]=1 ;;
         --stress-ng) RUN_TESTS[STRESS_NG]=1 ;;
         --ltp) RUN_TESTS[LTP]=1 ;;
-        --ltp_rt) RUN_TESTS[LTP_RT]=1 ;;
         --stress) RUN_TESTS[STRESS]=1 ;;
         --docker) CYCLICTEST_MODE="docker" ;;
         --duration) DURATION="$2"; shift ;;
@@ -53,14 +51,13 @@ while (( "$#" )); do
     shift
 done
 
-IFS=' ' read -r -a stress_ng_opts <<< "$STRESS_NG_CUSTOM_OPTS"
+#IFS=' ' read -r -a stress_ng_opts <<< "$STRESS_NG_CUSTOM_OPTS"
 
 run_command() {
     local cmd=$1
     shift
     local args=("$@")
     local cmd_string="$cmd ${args[*]}"
-
     echo "Executing command: $cmd_string"
     timeout -k "$DURATION" "$DURATION" bash -c "$cmd_string > /dev/null 2>&1" &
 }
@@ -98,29 +95,15 @@ if [[ $RUN_HWLATDETECT -eq 1 ]]; then
     hwlatdetect --duration=60s >> "$LOG_FILE" 2>&1
 fi
 
-
 # Run selected tests
 [[ ${RUN_TESTS[HACKBENCH]} -eq 1 ]] && run_command hackbench 20
 [[ ${RUN_TESTS[DD]} -eq 1 ]] && run_command dd if=/dev/zero of=/dev/null bs=128M
 [[ ${RUN_TESTS[STRESS_NG]} -eq 1 ]] && run_command stress-ng "${stress_ng_opts[@]}"
 [[ ${RUN_TESTS[STRESS]} -eq 1 ]] && run_command stress --cpu 4 --vm 16 --vm-bytes 1G -t 1m
 [[ ${RUN_TESTS[LTP]} -eq 1 ]] && run_command /opt/ltp/runltp -x 80 -R -q
-# Run LTP real-time test
-if [[ ${RUN_TESTS[LTP_RT]} -eq 1 ]]; then
-    CURRENT_DIR=$(pwd)
-    LTP_SCRIPT_PATH="./ltp/testcases/realtime/run.sh"
-    if [[ -f "$LTP_SCRIPT_PATH" ]]; then
-        cd "$(dirname "$LTP_SCRIPT_PATH")"
-        timeout -k "$DURATION" "$DURATION" bash -c 'while :; do ./run.sh -t all -l 1 > /dev/null 2>&1; done' &
-        cd "$CURRENT_DIR"
-    else
-        echo "LTP script not found at $LTP_SCRIPT_PATH" >> "$LOG_FILE"
-    fi
-fi
-
-CYCLICTEST_PARAMS="-l$LOOP_COUNT --mlockall --smi --smp --priority=98 --interval=200 --distance=0 -h400 -v"
 
 # Run cyclictest based on mode
+CYCLICTEST_PARAMS="-l$LOOP_COUNT --mlockall --smi --smp --priority=98 --interval=200 --distance=0 -h400 -v"
 if [[ $CYCLICTEST_MODE == "docker" ]]; then
     docker run --cap-add=sys_nice --cap-add=ipc_lock --ulimit rtprio=99 --device-cgroup-rule='c 10:* rmw' -v /dev:/dev -v "$(pwd)/output:/output" --rm nconotor/rt-tests:r2 /bin/bash -c "cyclictest $CYCLICTEST_PARAMS" 2>> "$LOG_FILE" > "$OUTPUT_DIR/output"
 else
