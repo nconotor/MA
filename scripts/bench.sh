@@ -28,7 +28,7 @@ declare -A RUN_TESTS=(
 )
 
 CYCLICTEST_MODE="baremetal"
-STRESS_NG_CUSTOM_OPTS="--all 1"
+STRESS_NG_CUSTOM_OPTS="--class cpu,device,interrupt,network,pipe,scheduler,io,cpu-cache --all 1"
 DURATION="210s"
 LOOP_COUNT="1000000"
 RUN_HWLATDETECT=0
@@ -100,7 +100,7 @@ fi
 [[ ${RUN_TESTS[DD]} -eq 1 ]] && run_command dd if=/dev/zero of=/dev/null bs=128M
 [[ ${RUN_TESTS[STRESS_NG]} -eq 1 ]] && run_command stress-ng "${stress_ng_opts[@]}"
 [[ ${RUN_TESTS[STRESS]} -eq 1 ]] && run_command stress --cpu 4 --vm 16 --vm-bytes 1G -t 1m
-[[ ${RUN_TESTS[LTP]} -eq 1 ]] && run_command /opt/ltp/runltp -x 80 -R -q
+[[ ${RUN_TESTS[LTP]} -eq 1 ]] && run_command /opt/ltp/runltp -x 10 -R -q
 
 # Run cyclictest based on mode
 CYCLICTEST_PARAMS="-l$LOOP_COUNT --mlockall --smi --smp --priority=98 --interval=200 --distance=0 -h400 -v"
