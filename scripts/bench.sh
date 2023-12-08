@@ -5,26 +5,32 @@ current_datetime() {
     date +"%Y-%m-%d %H:%M:%S"
 }
 
-# Function to save the journalctl log
-save_journalctl_log() {
-    local start_time=$1
-    local end_time=$2
-    local journallog_file="$3/journallog"
-
-    journalctl --since "$start_time" --until "$end_time" > "$journallog_file"
-}
-
 run_command() {
     local cmd=$1
     shift
     local args=("$@")
     local cmd_string="$cmd ${args[*]}"
     local test_name="${cmd%% *}" # Get the first word in cmd_string as the test name
-    local log_file="$OUTPUT_DIR/$test_name.log" # Use test name as the log file name
+    local sanitized_test_name="${test_name//\//_}" # Replace slashes with underscores
+    local log_file="$OUTPUT_DIR/${sanitized_test_name}.log" # Use sanitized test name as the log file name
 
     echo "Executing command: $cmd_string"
     echo "Saving log to $log_file"
-    timeout -k "$DURATION" "$DURATION" bash -c "$cmd_string > $log_file 2>&1" &
+
+    local start_time=$(date +%s)
+    local current_time
+    local elapsed_time
+    local duration_seconds=$(echo "$DURATION" | sed 's/[^0-9]*//g') # Convert DURATION to seconds
+
+    while true; do
+        timeout -k 5 "$DURATION" bash -c "$cmd_string >> $log_file 2>&1"
+        current_time=$(date +%s)
+        elapsed_time=$((current_time - start_time))
+
+        if (( elapsed_time >= duration_seconds )); then
+            break
+        fi
+    done
 }
 
 # Assure all features are activated (needed for SMI detection in cyclictest)
@@ -57,7 +63,9 @@ while (( "$#" )); do
         --stress) RUN_TESTS[STRESS]=1 ;;
         --docker) CYCLICTEST_MODE="docker" ;;
         --duration) DURATION="$2"; shift ;;
+        -d) DURATION="$2"; shift ;;
         --loopcount) LOOP_COUNT="$2"; shift ;;
+        -l) LOOP_COUNT="$2"; shift ;;
         --stress_ng_opt) STRESS_NG_CUSTOM_OPTS="$2"; shift ;;
         --hwlatdetect) RUN_HWLATDETECT=1 ;;
         --factor) FACTOR="$2"; shift ;;
@@ -105,13 +113,15 @@ if [[ $RUN_HWLATDETECT -eq 1 ]]; then
     hwlatdetect --duration=60s >> "$LOG_FILE" 2>&1
 fi
 
+echo "Starting Stressors"
 # Run selected tests
 [[ ${RUN_TESTS[HACKBENCH]} -eq 1 ]] && run_command hackbench 20
 [[ ${RUN_TESTS[DD]} -eq 1 ]] && run_command dd if=/dev/zero of=/dev/null bs=128M
 [[ ${RUN_TESTS[STRESS_NG]} -eq 1 ]] && run_command stress-ng "${stress_ng_opts[@]}"
-[[ ${RUN_TESTS[STRESS]} -eq 1 ]] && run_command stress --cpu 4 --vm 16 --vm-bytes 1G -t 1m
-[[ ${RUN_TESTS[LTP]} -eq 1 ]] && run_command /opt/ltp/runltp -x 10 
+[[ ${RUN_TESTS[STRESS]} -eq 1 ]] && run_command stress --cpu 4 --vm 8 --vm-bytes 1G -t 1m
+[[ ${RUN_TESTS[LTP]} -eq 1 ]] && run_command /opt/ltp/runltp -x 5 
 
+echo "Starting Cyclictest"
 # Run cyclictest based on mode
 CYCLICTEST_PARAMS="-l$LOOP_COUNT --mlockall --smi --smp --priority=98 --interval=200 --distance=0 -h400 -v"
 if [[ $CYCLICTEST_MODE == "docker" ]]; then
@@ -119,11 +129,11 @@ if [[ $CYCLICTEST_MODE == "docker" ]]; then
 else
     ( time cyclictest $CYCLICTEST_PARAMS ) >> "$LOG_FILE" 2>&1 > "$OUTPUT_DIR/output"
 fi
+echo "Done with Cyclictest"
 
 # Record the end time and save the journallog
 end_time=$(current_datetime)
-echo "Saving journalctl log from $start_time to $end_time in $OUTPUT_DIR/journallog"
-save_journalctl_log "$start_time" "$end_time" "$OUTPUT_DIR"
+echo "Start Time: $start_time End Time: $end_time" >> "$LOG_FILE"
 
 # Run plot.sh
 cd "$OUTPUT_DIR"
