@@ -17,20 +17,23 @@ run_command() {
     echo "Executing command: $cmd_string"
     echo "Saving log to $log_file"
 
-    local start_time=$(date +%s)
-    local current_time
-    local elapsed_time
     local duration_seconds=$(echo "$DURATION" | sed 's/[^0-9]*//g') # Convert DURATION to seconds
+    local start_time=$(date +%s)
 
-    while true; do
-        timeout -k 5 "$DURATION" bash -c "$cmd_string >> $log_file 2>&1"
-        current_time=$(date +%s)
-        elapsed_time=$((current_time - start_time))
+    (
+        while true; do
+            bash -c "$cmd_string >> $log_file 2>&1"
 
-        if (( elapsed_time >= duration_seconds )); then
-            break
-        fi
-    done
+            local current_time=$(date +%s)
+            local elapsed_time=$((current_time - start_time))
+
+            if (( elapsed_time >= duration_seconds )); then
+                break
+            fi
+        done
+    ) &
+
+    PIDS+=($!)  # Store PID of the subshell
 }
 
 # Assure all features are activated (needed for SMI detection in cyclictest)
@@ -130,6 +133,10 @@ else
     ( time cyclictest $CYCLICTEST_PARAMS ) >> "$LOG_FILE" 2>&1 > "$OUTPUT_DIR/output"
 fi
 echo "Done with Cyclictest"
+
+for pid in "${PIDS[@]}"; do
+    wait $pid
+done
 
 # Record the end time and save the journallog
 end_time=$(current_datetime)
