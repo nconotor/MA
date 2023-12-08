@@ -14,7 +14,20 @@ save_journalctl_log() {
     journalctl --since "$start_time" --until "$end_time" > "$journallog_file"
 }
 
-# Assure all features are activated
+run_command() {
+    local cmd=$1
+    shift
+    local args=("$@")
+    local cmd_string="$cmd ${args[*]}"
+    local test_name="${cmd%% *}" # Get the first word in cmd_string as the test name
+    local log_file="$OUTPUT_DIR/$test_name.log" # Use test name as the log file name
+
+    echo "Executing command: $cmd_string"
+    echo "Saving log to $log_file"
+    timeout -k "$DURATION" "$DURATION" bash -c "$cmd_string > $log_file 2>&1" &
+}
+
+# Assure all features are activated (needed for SMI detection in cyclictest)
 modprobe msr
 
 # Default settings: all tests are off except for cyclictest
@@ -29,9 +42,10 @@ declare -A RUN_TESTS=(
 
 CYCLICTEST_MODE="baremetal"
 STRESS_NG_CUSTOM_OPTS="--class cpu,device,interrupt,network,pipe,scheduler,io,cpu-cache --all 1"
-DURATION="210s"
+DURATION=""
 LOOP_COUNT="1000000"
 RUN_HWLATDETECT=0
+FACTOR=1/5000
 
 # Parse command-line arguments
 while (( "$#" )); do
@@ -46,31 +60,26 @@ while (( "$#" )); do
         --loopcount) LOOP_COUNT="$2"; shift ;;
         --stress_ng_opt) STRESS_NG_CUSTOM_OPTS="$2"; shift ;;
         --hwlatdetect) RUN_HWLATDETECT=1 ;;
+        --factor) FACTOR="$2"; shift ;;
         *) echo "Error: Invalid option $1"; exit 1 ;;
     esac
     shift
 done
+IFS=' ' read -r -a stress_ng_opts <<< "$STRESS_NG_CUSTOM_OPTS"
 
-#IFS=' ' read -r -a stress_ng_opts <<< "$STRESS_NG_CUSTOM_OPTS"
+# If no minute flag is given calculate the time needed
+if [[ -z "$DURATION" ]]; then
+    DURATION=$(echo "scale=0; $LOOP_COUNT * $FACTOR" | bc)"s"
+fi
 
-run_command() {
-    local cmd=$1
-    shift
-    local args=("$@")
-    local cmd_string="$cmd ${args[*]}"
-    echo "Executing command: $cmd_string"
-    timeout -k "$DURATION" "$DURATION" bash -c "$cmd_string > /dev/null 2>&1" &
-}
-
-# Create a timestamp
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-
-# Format the duration and loop count for folder naming
-FORMATTED_DURATION=${DURATION//[^0-9]/}
-FORMATTED_LOOP_COUNT=${LOOP_COUNT//[^0-9]/}
-
-# Create a folder name with loop count, runtime, and timestamp
-OUTPUT_DIR="Output_loop${FORMATTED_LOOP_COUNT}_run${FORMATTED_DURATION}_$TIMESTAMP"
+# Create an output folder
+TEST_ABBREVIATIONS=""
+for test in HACKBENCH DD STRESS_NG LTP STRESS; do
+    if [[ ${RUN_TESTS[$test]} -eq 1 ]]; then
+        TEST_ABBREVIATIONS+="${test:0:1}"
+    fi
+done
+OUTPUT_DIR="Output_l${LOOP_COUNT//[^0-9]}_t${DURATION//[^0-9]}_${TEST_ABBREVIATIONS}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR"
 
 # Log file setup
@@ -81,6 +90,7 @@ LOG_FILE="$OUTPUT_DIR/log"
     echo "Cyclictest Mode: $CYCLICTEST_MODE"
     echo "Stress-ng Custom Options: $STRESS_NG_CUSTOM_OPTS"
     echo "Run Hwlatdetect: $RUN_HWLATDETECT"
+    echo "Factor: $FACTOR"
     for test in "${!RUN_TESTS[@]}"; do
         echo "Run $test: ${RUN_TESTS[$test]}"
     done
@@ -100,29 +110,22 @@ fi
 [[ ${RUN_TESTS[DD]} -eq 1 ]] && run_command dd if=/dev/zero of=/dev/null bs=128M
 [[ ${RUN_TESTS[STRESS_NG]} -eq 1 ]] && run_command stress-ng "${stress_ng_opts[@]}"
 [[ ${RUN_TESTS[STRESS]} -eq 1 ]] && run_command stress --cpu 4 --vm 16 --vm-bytes 1G -t 1m
-[[ ${RUN_TESTS[LTP]} -eq 1 ]] && run_command /opt/ltp/runltp -x 10 -R -q
+[[ ${RUN_TESTS[LTP]} -eq 1 ]] && run_command /opt/ltp/runltp -x 10 
 
 # Run cyclictest based on mode
 CYCLICTEST_PARAMS="-l$LOOP_COUNT --mlockall --smi --smp --priority=98 --interval=200 --distance=0 -h400 -v"
 if [[ $CYCLICTEST_MODE == "docker" ]]; then
     docker run --cap-add=sys_nice --cap-add=ipc_lock --ulimit rtprio=99 --device-cgroup-rule='c 10:* rmw' -v /dev:/dev -v "$(pwd)/output:/output" --rm nconotor/rt-tests:r2 /bin/bash -c "cyclictest $CYCLICTEST_PARAMS" 2>> "$LOG_FILE" > "$OUTPUT_DIR/output"
 else
-    { time cyclictest $CYCLICTEST_PARAMS; } 2>> "$LOG_FILE" > "$OUTPUT_DIR/output"
+    ( time cyclictest $CYCLICTEST_PARAMS ) >> "$LOG_FILE" 2>&1 > "$OUTPUT_DIR/output"
 fi
 
-# Log CPU states
-{
-    echo "Online CPUs: $(cat /sys/devices/system/cpu/online)"
-    echo "Offline CPUs: $(cat /sys/devices/system/cpu/offline)"
-} >> "$LOG_FILE"
-
-# Record the end time
+# Record the end time and save the journallog
 end_time=$(current_datetime)
-# Save the journalctl log in the output directory
 echo "Saving journalctl log from $start_time to $end_time in $OUTPUT_DIR/journallog"
 save_journalctl_log "$start_time" "$end_time" "$OUTPUT_DIR"
 
 # Run plot.sh
 cd "$OUTPUT_DIR"
-../plot.sh
+#../plot.sh
 python3 ../info.py output
