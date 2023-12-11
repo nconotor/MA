@@ -22,7 +22,7 @@ run_command() {
 
     (
         while true; do
-            bash -c "$cmd_string >> $log_file 2>&1"
+            timeout -k "$DURATION" "$DURATION" bash -c "$cmd_string >> $log_file 2>&1"
 
             local current_time=$(date +%s)
             local elapsed_time=$((current_time - start_time))
@@ -121,7 +121,7 @@ echo "Starting Stressors"
 [[ ${RUN_TESTS[HACKBENCH]} -eq 1 ]] && run_command hackbench 20
 [[ ${RUN_TESTS[DD]} -eq 1 ]] && run_command dd if=/dev/zero of=/dev/null bs=128M
 [[ ${RUN_TESTS[STRESS_NG]} -eq 1 ]] && run_command stress-ng "${stress_ng_opts[@]}"
-[[ ${RUN_TESTS[STRESS]} -eq 1 ]] && run_command stress --cpu 4 --vm 8 --vm-bytes 1G -t 1m
+[[ ${RUN_TESTS[STRESS]} -eq 1 ]] && run_command stress --cpu 4 --vm 4 --vm-bytes 1G -t 1m
 [[ ${RUN_TESTS[LTP]} -eq 1 ]] && run_command /opt/ltp/runltp -x 5 
 
 echo "Starting Cyclictest"
