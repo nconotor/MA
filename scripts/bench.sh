@@ -19,10 +19,11 @@ run_command() {
 
     local duration_seconds=$(echo "$DURATION" | sed 's/[^0-9]*//g') # Convert DURATION to seconds
     local start_time=$(date +%s)
+    local killDuration=$((duration_seconds + 30))
 
     (
         while true; do
-            timeout -k "$DURATION" "$DURATION" bash -c "$cmd_string >> $log_file 2>&1"
+            timeout -k "$killDuration" "$DURATION" bash -c "$cmd_string >> $log_file 2>&1"
 
             local current_time=$(date +%s)
             local elapsed_time=$((current_time - start_time))
@@ -50,7 +51,7 @@ declare -A RUN_TESTS=(
 )
 
 CYCLICTEST_MODE="baremetal"
-STRESS_NG_CUSTOM_OPTS="--class cpu,device,interrupt,network,pipe,scheduler,io,cpu-cache --all 1"
+STRESS_NG_CUSTOM_OPTS="--all 1 --exclude softlockup,gpu" # Exclude softlockup because it is designed to hang up the system 
 DURATION=""
 LOOP_COUNT="1000000"
 RUN_HWLATDETECT=0
@@ -82,6 +83,8 @@ IFS=' ' read -r -a stress_ng_opts <<< "$STRESS_NG_CUSTOM_OPTS"
 if [[ -z "$DURATION" ]]; then
     DURATION=$(echo "scale=0; $LOOP_COUNT * $FACTOR" | bc)"s"
 fi
+
+echo "DURATION is $DURATION"
 
 # Create an output folder
 TEST_ABBREVIATIONS=""
@@ -124,19 +127,20 @@ echo "Starting Stressors"
 [[ ${RUN_TESTS[STRESS]} -eq 1 ]] && run_command stress --cpu 4 --vm 4 --vm-bytes 1G -t 1m
 [[ ${RUN_TESTS[LTP]} -eq 1 ]] && run_command /opt/ltp/runltp -x 5 
 
+echo "Waiting for all stressors to finish"
+for pid in "${PIDS[@]}"; do
+    wait $pid
+done
+
 echo "Starting Cyclictest"
 # Run cyclictest based on mode
-CYCLICTEST_PARAMS="-l$LOOP_COUNT --mlockall --smi --smp --priority=98 --interval=200 --distance=0 -h400 -v"
+CYCLICTEST_PARAMS="-l$LOOP_COUNT --mlockall --smi --smp --priority=99 --interval=200 --distance=0 -h400 -v --json $OUTPUT_DIR/output.json"
 if [[ $CYCLICTEST_MODE == "docker" ]]; then
-    docker run --cap-add=sys_nice --cap-add=ipc_lock --ulimit rtprio=99 --device-cgroup-rule='c 10:* rmw' -v /dev:/dev -v "$(pwd)/output:/output" --rm nconotor/rt-tests:r2 /bin/bash -c "cyclictest $CYCLICTEST_PARAMS" 2>> "$LOG_FILE" > "$OUTPUT_DIR/output"
+    docker run --cap-add=sys_nice --cap-add=ipc_lock --ulimit rtprio=99 --device-cgroup-rule='c 10:* rmw' -v /dev:/dev -v "$(pwd)/output:/output" --rm nconotor/rt-tests:r2 /bin/bash -c "cyclictest $CYCLICTEST_PARAMS" 2>> "$LOG_FILE" > /dev/null
 else
     ( time cyclictest $CYCLICTEST_PARAMS ) >> "$LOG_FILE" 2>&1 > "$OUTPUT_DIR/output"
 fi
 echo "Done with Cyclictest"
-
-for pid in "${PIDS[@]}"; do
-    wait $pid
-done
 
 # Record the end time and save the journallog
 end_time=$(current_datetime)
@@ -144,5 +148,4 @@ echo "Start Time: $start_time End Time: $end_time" >> "$LOG_FILE"
 
 # Run plot.sh
 cd "$OUTPUT_DIR"
-#../plot.sh
 python3 ../info.py output
