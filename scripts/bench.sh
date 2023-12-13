@@ -127,11 +127,6 @@ echo "Starting Stressors"
 [[ ${RUN_TESTS[STRESS]} -eq 1 ]] && run_command stress --cpu 4 --vm 4 --vm-bytes 1G -t 1m
 [[ ${RUN_TESTS[LTP]} -eq 1 ]] && run_command /opt/ltp/runltp -x 5 
 
-echo "Waiting for all stressors to finish"
-for pid in "${PIDS[@]}"; do
-    wait $pid
-done
-
 echo "Starting Cyclictest"
 # Run cyclictest based on mode
 CYCLICTEST_PARAMS="-l$LOOP_COUNT --mlockall --smi --smp --priority=99 --interval=200 --distance=0 -h400 -v --json $OUTPUT_DIR/output.json"
@@ -145,6 +140,11 @@ echo "Done with Cyclictest"
 # Record the end time and save the journallog
 end_time=$(current_datetime)
 echo "Start Time: $start_time End Time: $end_time" >> "$LOG_FILE"
+
+echo "Waiting for all stressors to finish"
+for pid in "${PIDS[@]}"; do
+    wait $pid
+done
 
 # Run plot.sh
 cd "$OUTPUT_DIR"
